@@ -1,0 +1,55 @@
+new_cluster: &new_cluster
+  new_cluster:
+    spark_version: 15.4.x-scala2.12
+    data_security_mode: USER_ISOLATION
+    spark_conf:
+      spark.databricks.delta.formatCheck.enabled: false
+    num_workers: 1
+    node_type_id: Standard_D4ds_v5
+    custom_tags:
+      finops-projecte: sta-chatbot
+
+common_permissions: &permissions
+  permissions:
+    - level: CAN_VIEW
+      group_name: pgc_pre-wspchb-users-ug
+
+resources:
+  jobs:
+    sta-chatbot_create_objects:
+      name: sta-chatbot_create_objects
+      job_clusters:
+        - job_cluster_key: sta-chatbot_create_objects
+          <<: *new_cluster
+      tasks:
+      #################################################################################################################
+        - task_key: CreateObjects
+          job_cluster_key: sta-chatbot_create_objects
+          notebook_task:
+            notebook_path: ../create_objects/notebooks/CreateObjects.py
+            base_parameters:
+              env: ${bundle.target}
+              # TO DO Catalog, schema where data will be retrieved and stored
+              #domain: alt
+              catalog: admin_govern_sta_des
+              use_case: chatbot
+              hierarchy_volume: ctti_rag_data
+              hierarchy_volume_core_folder: core_files
+              hierarchy_volume_user_temporary_folder: user_files/temporary_files
+              table_functional_name: ctti_docs
+              des_managed_location: abfss://managed@isteemstautydbsdev001.dfs.core.windows.net 
+              pre_managed_location: abfss://managed@pgceemstautyadmpre001.dfs.core.windows.net
+              pro_managed_location: abfss://managed@pgceemstautyadmpro001.dfs.core.windows.net
+              des_external_location: abfss://external@isteemstautydbsdev001.dfs.core.windows.net
+              pre_external_location: abfss://external@pgceemstautyadmpre001.dfs.core.windows.net
+              pro_external_location: abfss://external@pgceemstautyadmpro001.dfs.core.windows.net
+              # bundle root path in the databricks workspace
+              bundle_root: /Workspace${workspace.file_path}
+              # git source information of current ML resource deployment; persisted as part of the workflow run
+              git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}
+        #################################################################################################################
+
+      <<: *permissions
+      email_notifications:
+        on_failure:
+          - joao.silvagalvao@nttdata.com

@@ -1,0 +1,29 @@
+# The name of the bundle. run `databricks bundle schema` to see the full bundle settings schema.
+bundle:
+  name: sta-chatbot
+
+variables:
+  experiment_name:
+    description: Experiment name for the rag chatbot.
+    default: /Users/${workspace.current_user.userName}/chatbot
+  model_name:
+    description: Model name for the rag chatbot.
+    default: chatbot_model
+
+include:
+  - ./resources/*.yml
+
+# Deployment Target specific values for workspace
+targets:
+  des:
+    default: true
+    workspace:
+      host: https://adb-285070002293575.15.azuredatabricks.net
+ 
+  pre:
+    workspace:
+      host: https://adb-3032011656902762.2.azuredatabricks.net
+      
+  pro:
+    workspace:
+      host: https://adb-3583375544375164.4.azuredatabricks.net

@@ -1,0 +1,100 @@
+new_cluster: &new_cluster
+  new_cluster:
+    spark_version: 15.4.x-scala2.12
+    data_security_mode: USER_ISOLATION
+    spark_conf:
+      spark.databricks.delta.formatCheck.enabled: false
+    num_workers: 1
+    node_type_id: Standard_D4ds_v5
+    custom_tags:
+      finops-projecte: sta-chatbot
+
+common_permissions: &permissions
+  permissions:
+    - level: CAN_VIEW
+      group_name: pgc_pre-wspchb-users-ug
+
+resources:
+  jobs:
+    sta-chatbot_build:
+      name: sta-chatbot_build
+      job_clusters:
+        - job_cluster_key: sta-chatbot_build
+          <<: *new_cluster
+      tasks:
+      #################################################################################################################
+        - task_key: BuildDocumentIndex
+          libraries:
+              - pypi:
+                  package: "databricks-vectorsearch==0.39"
+              - pypi:
+                  package: "mlflow==2.17.0"
+              - pypi:
+                  package: "langchain-community==0.2.10"
+              - pypi:
+                  package: "langchain-text-splitters==0.2.2"
+              - pypi:
+                  package: "pypdf==4.2.0"
+          job_cluster_key: sta-chatbot_build
+          notebook_task:
+            notebook_path: ../build_document_index/notebooks/Build_Document_Index.py
+            base_parameters:
+              env: ${bundle.target}
+              # TO DO Catalog, schema where data will be retrieved and stored
+              #domain: alt
+              finops_tag: sta-chatbot
+              catalog: admin_govern_sta_des
+              use_case: chatbot
+              hierarchy_volume: ctti_rag_data
+              hierarchy_volume_core_folder: core_files
+              hierarchy_volume_user_temporary_folder: user_files/temporary_files
+              table_functional_name: ctti_docs
+              vector_search_endpoint_name: sta-chatbot
+              llm_endpoint_name: chatbot_llm
+              embedding_endpoint_name: chatbot_embeddings
+              des_managed_location: abfss://managed@isteemstautydbsdev001.dfs.core.windows.net 
+              pre_managed_location: abfss://managed@pgceemstautyadmpre001.dfs.core.windows.net
+              pro_managed_location: abfss://managed@pgceemstautyadmpro001.dfs.core.windows.net
+              des_external_location: abfss://external@isteemstautydbsdev001.dfs.core.windows.net
+              pre_external_location: abfss://external@pgceemstautyadmpre001.dfs.core.windows.net
+              pro_external_location: abfss://external@pgceemstautyadmpro001.dfs.core.windows.net
+              openai_api_base: https://ist-des-swedencentral-chatbot.openai.azure.com/
+              # bundle root path in the databricks workspace
+              bundle_root: /Workspace${workspace.file_path}
+              # git source information of current ML resource deployment; persisted as part of the workflow run
+              git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}
+        #################################################################################################################
+        - task_key: AssembleApplication
+          libraries:
+              - pypi:
+                  package: "databricks-vectorsearch==0.39"
+              - pypi:
+                  package: "mlflow==2.17.0"
+              - pypi:
+                  package: "langchain-community==0.2.10"
+              - pypi:
+                  package: "langchain==0.2.11"
+          job_cluster_key: sta-chatbot_build
+          depends_on:
+            - task_key: BuildDocumentIndex
+          notebook_task:
+            notebook_path: ../assemble_application/notebooks/Assemble_Application.py
+            base_parameters:
+              model_name: chatbot_model
+         #################################################################################################################
+        - task_key: DeployApplication
+          libraries:
+              - pypi:
+                  package: "mlflow==2.17.0"
+          job_cluster_key: sta-chatbot_build
+          depends_on:
+            - task_key: AssembleApplication
+          notebook_task:
+            notebook_path: ../deploy_application/notebooks/Deploy_Application.py
+            base_parameters: 
+              bundle_root: /Workspace${workspace.file_path}
+
+      <<: *permissions
+      email_notifications:
+        on_failure:
+          - joao.silvagalvao@nttdata.com

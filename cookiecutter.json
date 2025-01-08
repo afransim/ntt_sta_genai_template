@@ -1,0 +1,43 @@
+{
+    "directory_name": "sta-chatbot",
+    "bundle_name": "sta-chatbot",
+    "experiment_name": "chatbot",
+    "des_workspace": "https://adb-285070002293575.15.azuredatabricks.net",
+    "pre_workspace": "https://adb-3032011656902762.2.azuredatabricks.net",
+    "pro_workspace": "https://adb-3583375544375164.4.azuredatabricks.net",
+
+    "des_managed_location": "abfss://managed@isteemstautydbsdev001.dfs.core.windows.net",
+    "pre_managed_location": "abfss://managed@pgceemstautyadmpre001.dfs.core.windows.net",
+    "pro_managed_location": "abfss://managed@pgceemstautyadmpro001.dfs.core.windows.net",
+
+    "des_external_location": "abfss://external@isteemstautydbsdev001.dfs.core.windows.net",
+    "pre_external_location": "abfss://external@pgceemstautyadmpre001.dfs.core.windows.net",
+    "pro_external_location": "abfss://external@pgceemstautyadmpro001.dfs.core.windows.net",
+
+    "group_name":"pgc_pre-wspchb-users-ug",
+    "finops_tag":"sta-chatbot",
+
+    "vector_search_endpoint_name": "sta-chatbot",
+    "llm_endpoint_name": "chatbot_llm",
+    "embedding_endpoint_name": "chatbot_embeddings",
+    "openai_api_base": "https://ist-des-swedencentral-chatbot.openai.azure.com/",
+
+    "catalog": "admin_govern_sta_des",
+    "use_case": "chatbot",
+    "hierarchy_volume": "ctti_rag_data",
+    "hierarchy_volume_core_folder": "core_files",
+    "hierarchy_volume_user_temporary_folder": "user_files/temporary_files",
+    "flat_volume": "ctti_rag_data_flat",
+    "table_functional_name": "ctti_docs",
+    "model_name": "chatbot_model",
+    "document_type": "tmp",
+    "file_arrival_directory": "/Volumes/admin_govern_sta_des/brz_chatbot/ctti_rag_data/user_files/temporary_files/",
+    "min_time_between_triggers_seconds": 61,
+
+    "remove_files_workflow_schedule": "0 00 23 ? * *",
+    "timezone_id": "UTC",
+    "notification_email": "joao.silvagalvao@nttdata.com",
+
+    "chunk_size": 1000,
+    "chunk_overlap": 200
+}   

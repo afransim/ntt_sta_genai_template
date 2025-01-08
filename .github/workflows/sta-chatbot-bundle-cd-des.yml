@@ -1,0 +1,398 @@
+name: Run SonarQube and DependencyTrack in Des for sta-chatbot
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+env:
+  USERFOLDER: C:\Users\codereviewvm-admin\
+  PROJECT_NAME: chatbot
+  PROJECT_KEY: sta_chatbot_08_01_2025
+
+defaults:
+  run:
+    working-directory: ./sta-chatbot
+
+jobs:
+  tests:
+    runs-on: self-hosted
+    steps:
+      # Retrivieng the code to be analysed
+      - name: Checkout code for analysis
+        uses: actions/checkout@v4
+
+        # Installing pytest and libraries required for unit tests and running unit tests
+      - name: Install pytest and requirements libraries and running unit tests
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade setuptools
+          pip install -r test-requirements.txt
+          pip install pytest-cov
+          python -m pytest -m unit --cov=sta-chatbot --cov-report=xml:unit.xml
+      
+        # Deploy bundle and run main workflow for integration tests
+      - name: Validate and deploy bundle, run model workflow for integration tests
+        run: | 
+          databricks bundle deploy -t des
+          databricks bundle run sta-chatbot_build -t des
+
+        # Run integration tests
+      - name: Run integration tests and destroy bundle
+        run: |
+          python -m pytest -m integration --cov=sta-chatbot --cov-report=xml:integration.xml
+          databricks bundle destroy -t des --auto-approve
+
+  sonarqube:
+    runs-on: self-hosted
+    outputs:
+
+          output_sonarqube: ${{ steps.get_sonarqube_results.outputs.sonarqube_result}}
+
+
+    steps:
+        # Retrivieng the code to be analysed
+      - name: Checkout code for analysis
+        uses: actions/checkout@v4
+        
+        # Setting up Java ensuring compatibility with SonarQube
+      - name: Set up Java
+        id: setup-java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17' 
+          
+        # Download and setup of SonarQube Scanner using powershell  
+      - name: Download and setup SonarQube Scanner
+        shell: powershell
+        run: |
+          $env:SONAR_SCANNER_VERSION="6.0.0.4432"
+          $env:SONAR_SCANNER_DIR="$env:USERFOLDER\sonar-scanner-$env:SONAR_SCANNER_VERSION-windows"
+          Invoke-WebRequest -Uri "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$env:SONAR_SCANNER_VERSION-windows.zip" -OutFile "sonar-scanner.zip"
+          Expand-Archive -Path "sonar-scanner.zip" -DestinationPath "$env:USERFOLDER/.sonar" -Force
+          Remove-Item -Path "sonar-scanner.zip"
+          "$env:SONAR_SCANNER_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+        # Adding SonarQube Scanner instalation to the powershell PATH environment variable for easy access
+      - name: Add SonarQube Scanner to PATH
+        shell: powershell
+        run: |
+          $scannerPath = "$env:USERFOLDER\sonar-scanner-6.0.0.4432-windows\bin"
+          Write-Host "Adding $scannerPath to PATH"
+          $oldPath = [Environment]::GetEnvironmentVariable('PATH', [EnvironmentVariableTarget]::Process)
+          $newPath = "$scannerPath;$oldPath"
+          [Environment]::SetEnvironmentVariable('PATH', $newPath, [EnvironmentVariableTarget]::Process)
+          & "$scannerPath\sonar-scanner.bat" --version
+        
+        # Checking if the project exists and, if not, creating a new one
+      - name: SonarQube project creation/search
+        shell: powershell
+        run: |
+          
+          $headers_search_create = @{
+              "Authorization" = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${{ secrets.SONAR_TOKEN }}:"))
+            }
+          $apiUrl_search = "${{ secrets.SONAR_HOST_URL }}/api/projects/search"
+          $project_search = Invoke-RestMethod -Uri $apiUrl_search  -Method GET -Headers $headers_search_create
+          $existing_projects_name = $project_search.components.name
+          if ($existing_projects_name -ccontains $env:PROJECT_NAME) {
+            Write-Host "Project $env:PROJECT_NAME already exists."
+          } else {
+            Write-Host "Project $env:PROJECT_NAME does not exist and it will be created."
+            $apiUrl_create = "${{ secrets.SONAR_HOST_URL }}/api/projects/create"
+          
+            $body_create = @{
+                "project" = $env:PROJECT_KEY
+                "name"    = $env:PROJECT_NAME
+                "newCodeDefinitionType" = "PREVIOUS_VERSION" 
+              }
+            try {
+              $response_create = Invoke-RestMethod -Uri $apiUrl_create -Method POST -Headers $headers_search_create -Body $body_create -ContentType "application/x-www-form-urlencoded"
+              WriteHost "$response_create"
+              Write-Host "Project Created: $($response_create.project.name) with key: $($response_create.project.key)"
+              } catch {
+               $err = $_.Exception
+               Write-Host "$err"
+               }
+          } 
+
+        # Running SonarQube analysis
+      - name: Run SonarQube analysis
+        shell: powershell
+        run: |
+          
+          $scannerPath = "$env:USERFOLDER\sonar-scanner-6.0.0.4432-windows\bin"
+          & "$scannerPath\sonar-scanner.bat" `
+            -X `
+            -D sonar.python.version=3.11.0 `
+            -D sonar.sources=. `
+            -D sonar.host.url=${{ secrets.SONAR_HOST_URL }} `
+            -D sonar.token=${{ secrets.SONAR_TOKEN }} `
+            -D sonar.projectKey=$env:PROJECT_KEY `
+            -D sonar.projectName=$env:PROJECT_NAME `
+            -D sonar.python.coverage.reportPaths=unit.xml,integration.xml
+          
+
+        # Listing issues detected during analysis
+      - name: List issues detected
+        shell: powershell
+        run: |
+          
+          $sonarServerUrl = "${{ secrets.SONAR_HOST_URL }}"
+          $projectKey = $env:PROJECT_KEY
+          $projectName = $env:PROJECT_NAME
+          $sonarApiToken = "${{ secrets.SONAR_TOKEN }}"
+          $headers_list = @{
+              "Authorization" = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${{ secrets.SONAR_TOKEN }}:"))
+            }
+          $apiUrl_list = "$sonarServerUrl/api/issues/search?componentKeys=$projectKey&resolved=false"
+          $response_list = Invoke-RestMethod -Uri $apiUrl_list -Headers $headers_list -Method GET
+          Write-Output "========================="
+          if ($response_list.issues -and $response_list.issues.Count -gt 0) {
+              foreach ($issue in $response_list.issues) {
+                  $filePath = $issue.component -replace "${$projectKey}:", ""
+                  $line = $issue.line
+                  $message = $issue.message
+                  $severity = $issue.severity
+                  $rule = $issue.rule
+                  
+                  Write-Output "File: $filePath"
+                  Write-Output "Line: $line"
+                  Write-Output "Rule: $rule"
+                  Write-Output "Severity: $severity"
+                  Write-Output "Message: $message"
+                  Write-Output "========================="
+              }
+          } else {
+              Write-Output "No issues found for the project '$projectName'."
+          }
+          $apiUrl_coverage = "sonarQubeUrl/api/measures/component?component=$projectKey&metricKeys=coverage"
+          $response_coverage = Invoke-RestMethod -Uri $apiUrl_coverage -Headers  $headers_list -Method GET
+          $coverage = $response.component.measures[0].value
+          Write-Output "Coverage: $coverage"
+          Write-Output "========================="
+          
+
+        # Evaluating analysis results and setting output for results_evaluation step
+      - name: Retrieve SonarQube Analysis Results
+        id: get_sonarqube_results
+        shell: powershell
+        run: |
+          
+          $sonarQubeUrl = "${{ secrets.SONAR_HOST_URL }}"
+          $projectKey = $env:PROJECT_KEY
+          $sonarApiToken = "${{ secrets.SONAR_TOKEN }}"
+          $headers_analysis_results = @{
+              "Authorization" = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("${{ secrets.SONAR_TOKEN }}:"))
+            }
+          $apiUrl_analysis_results = "$sonarQubeUrl/api/qualitygates/project_status?projectKey=$projectKey"
+          $response_results = Invoke-RestMethod -Uri $apiUrl_analysis_results -Headers  $headers_analysis_results -Method GET
+          $qualityGateStatus = $response_results.projectStatus.status
+          $metricIssues = $response_results.projectStatus.conditions | Where-Object { $_.status -eq 'ERROR' }
+          Write-Output "Quality Gate Status: $qualityGateStatus"
+          $metricIssues | ForEach-Object { Write-Output "Issue: $($_.metricKey), Status: $($_.status), Value: $($_.actualValue)" }
+          if ($qualityGateStatus -ne "OK") {
+              Write-Output "Quality Gate Failed with status: $qualityGateStatus"
+              if ($metricIssues) {
+                  Write-Output "Detailed Issues:"
+                  $metricIssues | ForEach-Object {
+                      Write-Output "Metric: $($_.metricKey), Status: $($_.status), Value: $($_.actualValue)"
+                  }
+              }
+              "sonarqube_result=fail" | Out-File -Filepath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          } else {
+              Write-Output "Quality Gate Passed successfully."
+              "sonarqube_result=pass" | Out-File -Filepath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+          
+
+  dependency-track:
+    needs: sonarqube
+    runs-on: self-hosted
+    outputs:
+          
+          output_dependencytrack: ${{ steps.get_dependencytrack_results.outputs.dependencytrack_result}}
+          
+      
+    steps:
+        # Retrivieng the code to be analysed
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+        # Installing CycloneDX to generate SBOM file
+      - name: Install CycloneDX
+        shell: powershell
+        run: |
+          pip install 'cyclonedx-bom>=1.4.0,<4'
+        
+        # Generating SBOM file
+      - name: Generate Python SBOM
+        uses: CycloneDX/gh-python-generate-sbom@v2
+        with:
+          input: .\sta-chatbot\requirements.txt
+          output: .\bom.xml
+          format: xml
+
+        # Checking if the project exists and, if not, creating a new one; Retrieval of project UUID identifier
+      - name: Project creation/search and uuid retrieval
+        id: project_uuid
+        shell: powershell
+        run: |
+           
+           $apiUrl = "${{ secrets.DT_HOST_URL }}" 
+           $apiKey = "${{ secrets.DT_KEY }}" 
+           $projectName = "${{ env.PROJECT_NAME }}"
+           
+           $headers_search = @{
+               "X-Api-Key" = $apiKey
+               "Content-Type" = "application/json"
+           }
+           $apiUrl_search = "$apiUrl/api/v1/project?name=$projectName"
+           $response_search = Invoke-RestMethod -Uri $apiUrl_search -Method GET -Headers $headers_search
+           $response_search
+           if ($response_search | Where-Object { $_.name -eq $projectName }) {
+                $existingProject = $response_search | Where-Object { $_.name -eq $projectName }
+                $projectUuid = $existingProject.uuid
+                "project_uuid=$projectUuid" | Out-File -Filepath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+                Write-Output "Project '$projectName' already exists with UUID: $projectUuid"
+           } else {
+                $projectData = @{
+                  name = $projectName
+                  description = "$projectName project created via API during DES CI/CD workflow"
+                }
+                $jsonData = $projectData | ConvertTo-Json
+                $apiUrl_create = "$apiUrl/api/v1/project"
+                $response_create = Invoke-RestMethod -Uri $apiUrl_create -Method PUT -Headers $headers_search -Body $jsonData
+                if ($response_create) {
+                    $projectUuid = $response_create.uuid
+                    "project_uuid=$projectUuid" | Out-File -Filepath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+                    Write-Output "Project '$projectName' created successfully with UUID: $projectUuid"
+                } else {
+                    Write-Output "Failed to create the project. Please check your API key and URL."
+                    }
+           }
+
+        # Upload of BOM file to dependency-track server
+      - name: Upload BOM
+        shell: powershell
+        run: |
+          
+          $apiUrl_upload = "${{ secrets.DT_HOST_URL }}/api/v1/bom"
+          $apiKey = "${{ secrets.DT_KEY }}"
+          $projectUuid = "${{ steps.project_uuid.outputs.project_uuid }}"
+          
+          $headers_upload = @{
+              'X-Api-Key' = $apiKey
+              'Accept' = 'application/json'
+          }
+          $fileContent = Get-Content -Path './bom.xml' -Raw
+          $boundary = [System.Guid]::NewGuid().ToString()
+      
+          $body = @"
+          --$boundary
+          Content-Disposition: form-data; name="project"
+
+          $projectUuid
+          --$boundary
+          Content-Disposition: form-data; name="bom"; filename="bom.xml"
+          Content-Type: application/xml
+
+          $fileContent
+          --$boundary--
+          "@
+          $headers_upload["Content-Type"] = "multipart/form-data; boundary=$boundary"
+          try {
+              Write-Output "Debug: Uploading BOM file to Dependency Track for project UUID: $projectUuid"
+              $response_upload = Invoke-RestMethod -Uri $apiUrl_upload -Headers $headers_upload -Method POST -Body $body -UseBasicParsing -ErrorAction Stop
+              Write-Output "Debug: BOM upload response: $($response_upload | ConvertTo-Json)"
+          }
+          catch {
+              Write-Error "Error during BOM upload: $_"
+              Write-Error "Error details: $($_.Exception.Message)"
+              exit 1
+          }
+          Start-Sleep -Seconds 60 # Wait for Dependency-Track to process BOM file
+
+        # List vulnerabilitites found during Dependency-Track analysis
+      - name: List vulnerabilities found
+        shell: powershell
+        run: |
+          
+          $headers_list = @{
+              'Accept' = 'application/json'
+              'X-Api-Key' = '${{ secrets.DT_KEY }}'
+          }
+          Write-Output "${{ secrets.DT_KEY }}"
+          Write-Output "After key"
+          $projectUuid = '${{ steps.project_uuid.outputs.project_uuid }}'
+          $apiUrl_list = "${{ secrets.DT_HOST_URL }}/api/v1/finding/project/$projectUuid"
+          $response_list = Invoke-RestMethod -Uri $apiUrl_list -Headers $headers_list -Method GET -UseBasicParsing
+          Write-Output "========================="
+          if ($response_list.count -gt 0) {
+              Write-Output "Vulnerabilities found: $($response_list.count)"
+              foreach ($finding in $response_list) {
+                  Write-Output "Vulnerability ID: $($finding.vulnerability.vulnId)"
+                  Write-Output "Severity: $($finding.vulnerability.severity)"
+                  Write-Output "Description: $($finding.vulnerability.description)"
+                  Write-Output "========================="
+              }
+          } else {
+              Write-Output "No vulnerabilities were found for project UUID: $projectUuid"
+          }
+          
+      
+        # Retrieving risk score from Dependency Track analysis
+      - name: Retrieve Risk Score
+        id: get_dependencytrack_results
+        shell: powershell
+        run: |
+          
+          $headers_risk = @{
+              'Accept' = 'application/json'
+              'X-Api-Key' = '${{ secrets.DT_KEY }}'
+          }
+          Write-Output "${{ secrets.DT_KEY }}"
+          Write-Output "After key"
+          $projectUuid = '${{ steps.project_uuid.outputs.project_uuid }}'
+          $apiUrl_risk = "${{ secrets.DT_HOST_URL }}/api/v1/metrics/project/$projectUuid/current"
+          $response_risk = Invoke-RestMethod -Uri $apiUrl_risk -Headers $headers_risk -Method GET -UseBasicParsing
+          $riskScore = $response_risk.inheritedRiskScore
+          Write-Output "Inherited Risk Score: $riskScore"
+          if ([int]$riskScore -gt 100) {
+              Write-Host "Risk score is too high."
+              "dependencytrack_result=fail" | Out-File -Filepath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          } else {
+              Write-Host "Risk score is within acceptable limits."
+              "dependencytrack_result=pass" | Out-File -Filepath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+          
+    
+  results_evaluation:
+    runs-on: self-hosted
+    needs: [dependency-track, sonarqube]
+    steps:
+        # Evaluating analyses results; if at least one fails, the whole workflow fail
+      - name: Sonarqube and Dependency Track analyses evaluation
+        shell: powershell
+        env:
+          
+          OUTPUT_SQ: ${{needs.sonarqube.outputs.output_sonarqube}}
+          OUTPUT_DT: ${{needs.dependency-track.outputs.output_dependencytrack}}
+          
+        run: |
+          Write-Output "Sonarqube analysis results: $env:OUTPUT_SQ"
+          Write-Output "Dependency-Track analysis results: $env:OUTPUT_DT"
+          if ($env:OUTPUT_SQ -eq "fail" -and $env:OUTPUT_DT -eq "fail") {
+              Write-Host "Project failed both SonarQube and Dependency-Track evaluations."
+              exit 1
+          } elseif ($env:OUTPUT_SQ -eq "fail") {
+              Write-Host "Project failed SonarQube evaluation."
+              exit 1
+          } elseif ($env:OUTPUT_DT -eq "fail") {
+              Write-Host "Project failed Dependency-Track evaluation."
+              exit 1
+          } else {
+              Write-Host "Project passed both SonarQube and Dependency-Track evaluations."
+          }

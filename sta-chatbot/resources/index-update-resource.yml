@@ -1,0 +1,41 @@
+common_permissions: &permissions
+  permissions:
+    - level: CAN_VIEW
+      group_name: pgc_pre-wspchb-users-ug
+
+resources:
+  jobs:
+    sta-chatbot_index_update:
+      name: sta-chatbot_index_update
+      max_concurrent_runs: 5
+      tags: 
+        finops-projecte: sta-chatbot
+      tasks:
+      #################################################################################################################
+        - task_key: IndexUpdate
+          notebook_task: 
+            notebook_path: ../index_update/notebooks/UpdateDocIndex_genai_model.py
+            base_parameters:
+              env: ${bundle.target}
+              bundle_root: /Workspace${workspace.file_path}
+              vector_search_endpoint_name: sta-chatbot
+              embedding_endpoint_name: chatbot_embeddings
+              catalog: admin_govern_sta_des
+              use_case: chatbot
+              hierarchy_volume: ctti_rag_data
+              table_functional_name: ctti_docs
+              document_type: tmp              
+              # git source information of current ML resource deployment; persisted as part of the workflow run
+              model_name: chatbot_model
+              git_source_info: url:${bundle.git.origin_url}; branch:${bundle.git.branch}; commit:${bundle.git.commit}
+      <<: *permissions
+      email_notifications:
+        on_failure:
+          - joao.silvagalvao@nttdata.com
+      trigger:
+        pause_status: UNPAUSED
+        file_arrival:
+          url: /Volumes/admin_govern_sta_des/brz_chatbot/ctti_rag_data/user_files/temporary_files/
+          min_time_between_triggers_seconds: 61
+          
+      
